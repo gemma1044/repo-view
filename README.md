@@ -4,6 +4,8 @@
 
 ZCode、Claude Code、Codex CLI 这类终端 coding app 没有图形界面：agent 正在改哪些文件、每次 commit 动了哪几行，你在终端里只能靠 `git diff` 的字符流自己想象。repo-view 用一个零依赖的 Python 单文件在本机起个服务，浏览器里直接看。它本身就是一个 **Agent Skill**（自带 `SKILL.md`），agent 能自己把它拉起来、把链接发给你；你当然也可以脱离任何 agent 手动用。
 
+![Session Diff：左树只列改动文件，点开就是 diff](docs/screenshot.png)
+
 ## 它能干嘛
 
 **当一个文件浏览器用**
