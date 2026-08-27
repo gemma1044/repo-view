@@ -46,6 +46,8 @@ python3 serve.py <目录> [端口=8770] [--focus <相对路径>]...
 open 'http://127.0.0.1:8770/?mode=session'
 # 例：看整个 repo，但把 prompts 钉成快捷专区：
 python3 serve.py ~/Projects/myapp 8770 --focus server/prompts
+# 例：看一个全是软链的 skill 库（目录软链进树可读）：
+python3 serve.py ~/.zcode/skills 8774 --follow-symlinks
 ```
 
 零依赖：只要 Python 3 标准库，不用装任何包。
@@ -66,6 +68,7 @@ git clone https://github.com/gemma1044/repo-view.git ~/.zcode/skills/repo-view
 - **只读**：不写磁盘、不执行仓库代码，没有任何写操作
 - **只绑 127.0.0.1**：仅本机可访问，别把它暴露到公网
 - 自动忽略 `node_modules` / `.git` / `dist` / `build` 等重目录；文本 >1MB 截断显示；文件数 >20000 拒绝
+- 默认跳过软链；`--follow-symlinks` 让目录软链进树可读（防环，断链自动略过）——适合 `~/.zcode/skills` 这类软链集合；跟链模式下路径仍禁 `..` 和绝对路径
 - 一个实例服务一个目录；换目录 = 换个端口再起一个
 - 语法高亮走 cdnjs 的 highlight.js，离线自动降级为纯文本
 

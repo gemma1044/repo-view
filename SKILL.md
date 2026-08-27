@@ -23,6 +23,8 @@ python3 serve.py <目录> [端口=8770] [--focus <相对路径>]...
 open 'http://127.0.0.1:8770/?mode=session'
 # 例：服务整个 repo，同时把常看目录钉成快捷专区：
 /usr/bin/python3 ~/.zcode/skills/repo-view/serve.py ~/Projects/myapp 8770 --focus server/prompts
+# 例：浏览全是软链的 skill 库（~/.zcode/skills 里链到 .cursor/.agents 的 skill）：
+/usr/bin/python3 ~/.zcode/skills/repo-view/serve.py ~/.zcode/skills 8774 --follow-symlinks
 ```
 
 - 每次点击文件都是**现读磁盘**，看到的永远是当前内容（无缓存）。
@@ -58,6 +60,10 @@ API：`/api/session` · `/api/session/files?entry=` · `/api/session/diff?entry=
 深链：`?zone=<相对路径>` 打开直达某专区（不写入 pin）。
 
 快捷专区只在全库模式生效；Session Diff 模式下 chip 行自动隐藏。
+
+## 跟随软链（--follow-symlinks）
+
+默认建树跳过软链。加 `--follow-symlinks` 后目录软链进树、内容可读（realpath 去重防环，断链略过）。适合根目录本身就是软链集合的场景，如 `~/.zcode/skills`。此模式下路径检查改为逻辑段校验：禁 `..`、禁绝对路径，只能顺着树里存在的名字走。
 
 ## 已知边界
 

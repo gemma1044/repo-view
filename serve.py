@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """repo-view: 本地只读源码浏览器（零依赖，Python 3 标准库）。
 
-用法: python3 serve.py [目录=当前目录] [端口=8770] [--focus 相对目录]…
+用法: python3 serve.py [目录=当前目录] [端口=8770] [--focus 相对目录]… [--follow-symlinks]
 浏览器打开 http://127.0.0.1:<端口>
   - 全库浏览：左树右文、语法高亮、图片/视频
   - 快捷专区：--focus 指定的目录（以及页里手动钉的任意目录）进侧栏 chip，
     点一下树根切到该专区，点仓库名 chip 回全库；pin 按「仓库路径」存 localStorage
+  - --follow-symlinks：目录软链也进树可读（如 ~/.zcode/skills 里链到别处的 skill），防环；默认跳过软链
   - Session Diff：顶栏切换「工作区 / 各 commit / 整支相对 base」，只看该条目改动与 diff
 """
 import os
@@ -38,6 +39,7 @@ MAX_DIFF_BYTES = 2 * 1024 * 1024
 BASE_CANDIDATES = ("main", "master", "develop", "dev")
 
 ROOT = os.path.realpath(os.getcwd())
+FOLLOW_LINKS = False
 LANG_MAP = {
     ".ts": "typescript", ".tsx": "typescript", ".js": "javascript", ".jsx": "javascript",
     ".mjs": "javascript", ".cjs": "javascript", ".go": "go", ".py": "python",
@@ -53,6 +55,7 @@ LANG_MAP = {
 
 def build_tree():
     count = [0]
+    visited = {ROOT}  # 跟链模式下防软链环：每个 realpath 只展开一次
 
     def walk(dirpath, rel):
         nodes = []
@@ -64,11 +67,17 @@ def build_tree():
             if e.name in SKIP_DIRS or e.name.startswith(".DS"):
                 continue
             r = f"{rel}/{e.name}" if rel else e.name
-            if e.is_symlink():
+            is_link = e.is_symlink()
+            if is_link and not FOLLOW_LINKS:
                 continue
-            if e.is_dir(follow_symlinks=False):
+            if e.is_dir(follow_symlinks=True):
+                if is_link:
+                    rp = os.path.realpath(e.path)
+                    if rp in visited:
+                        continue
+                    visited.add(rp)
                 nodes.append({"name": e.name, "path": r, "type": "dir", "children": walk(e.path, r)})
-            elif e.is_file(follow_symlinks=False):
+            elif e.is_file(follow_symlinks=True):
                 count[0] += 1
                 if count[0] > MAX_FILES:
                     raise RuntimeError(f"文件数超过 {MAX_FILES}，目录太大")
@@ -80,6 +89,14 @@ def build_tree():
 
 
 def safe_path(rel):
+    if FOLLOW_LINKS:
+        # 软链目标可能在 ROOT 之外（realpath 会"逃出"），改为逻辑段检查：
+        # 禁 ..、禁绝对路径，只能顺着树里真实存在的名字走
+        segs = [s for s in str(rel).replace("\\", "/").split("/") if s not in ("", ".")]
+        if not segs or any(s == ".." for s in segs):
+            return None
+        p = os.path.join(ROOT, *segs)
+        return p if os.path.exists(p) else None
     p = os.path.realpath(os.path.join(ROOT, rel))
     if p != ROOT and not p.startswith(ROOT + os.sep):
         return None
@@ -1265,7 +1282,7 @@ def parse_focus(args, root):
 
 
 def main():
-    global ROOT, PAGE_OUT
+    global ROOT, PAGE_OUT, FOLLOW_LINKS
     positional = []
     args = sys.argv[1:]
     i = 0
@@ -1275,16 +1292,21 @@ def main():
             i += 2; continue
         if a.startswith("--focus="):
             i += 1; continue
+        if a == "--follow-symlinks":
+            i += 1; continue
         positional.append(a); i += 1
     if len(positional) > 0:
         ROOT = os.path.realpath(positional[0])
     port = int(positional[1]) if len(positional) > 1 else 8770
     if not os.path.isdir(ROOT):
         sys.exit(f"目录不存在: {ROOT}")
+    FOLLOW_LINKS = "--follow-symlinks" in args
     focus = parse_focus(sys.argv[1:], ROOT)
     PAGE_OUT = PAGE.replace("__SEED_FOCUS__", json.dumps(focus, ensure_ascii=False))
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print(f"repo-view: {ROOT} → http://127.0.0.1:{port}")
+    if FOLLOW_LINKS:
+        print("  跟随软链: 开（目录软链进树可读，防环；默认关）")
     if focus:
         print(f"  快捷专区种子: {', '.join(focus)}（页内也可 hover 目录行 ＋ 钉任意目录）")
     print(f"  Session Diff: http://127.0.0.1:{port}/?mode=session")
