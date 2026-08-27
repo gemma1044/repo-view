@@ -475,7 +475,7 @@ def session_diff(entry_id, rel):
 
 
 PAGE = r"""<!DOCTYPE html>
-<html lang="zh">
+<html lang="zh" translate="yes">
 <head>
 <meta charset="utf-8">
 <title>repo-view · 分支 Diff</title>
@@ -528,12 +528,28 @@ PAGE = r"""<!DOCTYPE html>
   .filter-btn.on { background:var(--panel); border-color:var(--line); color:var(--fg); font-weight:600; }
   #filterHint { font-size:11px; color:var(--dim); margin-left:4px; }
   #entries { display:flex; gap:5px; flex-wrap:wrap; align-items:center; max-height:72px; overflow:auto; }
-  .entry { padding:3px 9px; border:1px solid var(--line); background:var(--panel); border-radius:6px;
-           cursor:pointer; font-size:12px; color:var(--fg); max-width:280px;
+  .entry { position:relative; padding:3px 9px; border:1px solid var(--line); background:var(--panel);
+           border-radius:6px; cursor:pointer; font-size:12px; color:var(--fg); max-width:280px;
            overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .entry:hover { border-color:var(--accent); background:var(--bg); }
+  .entry:hover { border-color:var(--accent); background:var(--bg); z-index:5; }
   .entry.on { background:var(--chip-on); border-color:var(--chip-bd); color:var(--accent); font-weight:600; }
   .entry .n { color:var(--dim); font-weight:400; margin-left:4px; }
+  /* 截断芯片 hover 立刻显示完整标题（比原生 title 更快更可读） */
+  .entry[data-full]:hover::after {
+    content: attr(data-full);
+    position: absolute; left: 0; top: calc(100% + 6px); z-index: 30;
+    min-width: 220px; max-width: min(480px, 70vw);
+    padding: 8px 10px; border-radius: 8px;
+    background: #1f2328; color: #fff; font-size: 12px; font-weight: 400;
+    line-height: 1.45; white-space: normal; word-break: break-word;
+    box-shadow: 0 8px 24px rgba(0,0,0,.18);
+    pointer-events: none;
+  }
+  .entry[data-full]:hover::before {
+    content: ""; position: absolute; left: 14px; top: calc(100% + 2px); z-index: 31;
+    border: 5px solid transparent; border-bottom-color: #1f2328;
+    pointer-events: none;
+  }
   .entry-note { font-size:11px; color:var(--dim); width:100%; margin-top:2px; }
   .commits-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
   main { display:flex; flex:1; min-height:0; }
@@ -542,19 +558,23 @@ PAGE = r"""<!DOCTYPE html>
   #search { margin:10px; padding:6px 10px; background:var(--bg); color:var(--fg);
             border:1px solid var(--line); border-radius:6px; outline:none; font-size:13px; }
   #search:focus { border-color:var(--accent); }
-  #tree { overflow:auto; padding:0 6px 16px; flex:1; }
-  #tree details { margin-left:10px; }
+  #tree { overflow:auto; padding:0 6px 16px; flex:1; min-height:0; }
+  /* 文件路径是标识符，不参与整页翻译；翻译注入的 <font> 会打爆 nowrap+flex 树形缩进 */
+  #tree details { margin-left:10px; display:block; }
   #tree details.top { margin-left:0; }
   #tree summary { cursor:pointer; padding:2px 6px; border-radius:5px; list-style:none;
-                  user-select:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+                  user-select:none; display:block; white-space:nowrap; overflow:hidden;
+                  text-overflow:ellipsis; min-width:0; }
   #tree summary::-webkit-details-marker { display:none; }
   #tree summary::before { content:"▸ "; color:var(--dim); }
   #tree details[open] > summary::before { content:"▾ "; }
   #tree .f { display:flex; align-items:center; gap:6px; padding:2px 6px 2px 22px; cursor:pointer;
-             border-radius:5px; white-space:nowrap; overflow:hidden; color:var(--fg); }
+             border-radius:5px; white-space:nowrap; overflow:hidden; color:var(--fg);
+             min-width:0; max-width:100%; }
   #tree .f:hover { background:var(--sel); }
   #tree .f.cur { background:var(--sel); color:var(--accent); }
-  #tree .f span { overflow:hidden; text-overflow:ellipsis; }
+  #tree .f > .name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1 1 auto; }
+  #tree font { display:inline !important; white-space:inherit; }
   #tree .c-ts,#tree .c-tsx,#tree .c-js,#tree .c-jsx { color:#9a6700; }
   #tree .c-go { color:#0080a8; } #tree .c-py { color:#2b6cb0; }
   #tree .c-md { color:#1a7f37; } #tree .c-json,#tree .c-yaml { color:#bc4c00; }
@@ -570,7 +590,26 @@ PAGE = r"""<!DOCTYPE html>
   #btnDiff { margin-left:auto; padding:3px 12px; border:1px solid var(--line); background:var(--panel);
              color:var(--fg); border-radius:6px; cursor:pointer; font-size:12px; flex:none; }
   #btnDiff:hover { border-color:var(--accent); color:var(--accent); }
-  #content pre { background:transparent; font:12.5px/1.6 "SF Mono",Menlo,Consolas,monospace; overflow:auto; }
+  /* 不用 pre/code（整页翻译会跳过）。逐行 .code-line 块级节点：翻译改字时不会把 \n 吃成一团。 */
+  #content .code-body {
+    background:transparent;
+    font:12.5px/1.6 "SF Mono",Menlo,Consolas,monospace;
+    overflow:auto;
+    margin:0;
+    white-space:normal;
+  }
+  #content .code-body.hljs { padding:0; background:transparent; }
+  #content .code-line {
+    display:block;
+    white-space:pre-wrap;
+    word-break:break-word;
+    min-height:1.6em;
+  }
+  #content .code-line .hljs-comment,
+  #content .code-line .hljs-quote { color:#6a737d; }
+  #content .code-line.diff-add { background:rgba(46,160,67,.12); }
+  #content .code-line.diff-del { background:rgba(248,81,73,.12); }
+  #content .code-line.diff-hunk { color:#656d76; }
   #content img,#content video { max-width:100%; max-height:80vh; border-radius:8px; display:block;
     margin:12px 0; background:repeating-conic-gradient(#f6f8fa 0 25%, #eaeef2 0 50%) 0 0/16px 16px; }
   #statusbar { flex:none; padding:4px 14px; background:var(--panel); border-top:1px solid var(--line);
@@ -589,7 +628,7 @@ PAGE = r"""<!DOCTYPE html>
       <button type="button" class="mode-btn on" id="btnAll" title="浏览整库文件树">全库</button>
       <button type="button" class="mode-btn" id="btnSess" title="只看本分支/工作区改动">分支 Diff</button>
     </div>
-    <span class="hint">红点=改过 · 绿点=新增 · 灰点=删除 · / 搜索</span>
+    <span class="hint">红点=改过 · 绿点=新增 · 灰点=删除 · / 搜索 · 正文可整页翻译</span>
   </div>
   <div id="sess-bar">
     <div class="hdr-row scope">
@@ -614,9 +653,9 @@ PAGE = r"""<!DOCTYPE html>
   </div>
 </header>
 <main>
-  <aside><input id="search" placeholder="筛选文件名…" spellcheck="false"><div id="tree"></div></aside>
+  <aside translate="no"><input id="search" placeholder="筛选文件名…" spellcheck="false"><div id="tree" translate="no"></div></aside>
   <div id="content">
-    <div id="viewbar" style="display:none"><span id="vtitle"></span><button id="btnDiff"></button></div>
+    <div id="viewbar" style="display:none"><span id="vtitle" translate="no"></span><button id="btnDiff"></button></div>
     <div id="body"><div id="empty">点击左侧文件查看内容</div></div>
   </div>
 </main>
@@ -630,6 +669,27 @@ let curEl = null, curPath = null, curSt = null, mode = 'code';
 const $ = s => document.querySelector(s);
 
 function esc(s){ return String(s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+/** 逐行块级节点：整页翻译只改每行文字，不会把整文件并成一段。 */
+function renderCodeLines(text, lang){
+  const raw = String(text ?? '');
+  const lines = raw.split('\n');
+  return lines.map((line, i) => {
+    let html = esc(line);
+    let extra = '';
+    if (lang === 'diff'){
+      if (line.startsWith('+') && !line.startsWith('+++')) extra = ' diff-add';
+      else if (line.startsWith('-') && !line.startsWith('---')) extra = ' diff-del';
+      else if (line.startsWith('@@')) extra = ' diff-hunk';
+    }
+    if (window.hljs && lang){
+      try {
+        html = hljs.highlight(line, { language: lang, ignoreIllegals: true }).value;
+      } catch (e) { /* keep escaped */ }
+    }
+    if (!line) html = '&nbsp;';
+    return `<div class="code-line${extra}" translate="yes">${html}</div>`;
+  }).join('');
+}
 function cls(name){
   const e = name.split('.').pop().toLowerCase();
   if (['ts','tsx','js','jsx'].includes(e)) return 'c-ts';
@@ -657,15 +717,17 @@ function renderTree(filter){
         const d = document.createElement('details');
         if (top || filter || viewMode === 'session') d.open = true;
         d.className = top ? 'top' : '';
-        d.innerHTML = `<summary>${esc(n.name)}</summary>`;
+        d.setAttribute('translate', 'no');
+        d.innerHTML = `<summary translate="no">${esc(n.name)}</summary>`;
         walk(kids, d, false); parent.appendChild(d);
       } else {
         if (filter && !n.path.toLowerCase().includes(filter)) continue;
         const a = document.createElement('span');
         const st = n.st || STATUS[n.path];
         a.className = 'f ' + cls(n.name);
-        a.innerHTML = `<span class="${cls(n.name)}">${esc(n.name)}</span>` +
-                      (st ? `<i class="dot ${st}" title="${st}"></i>` : '');
+        a.setAttribute('translate', 'no');
+        a.innerHTML = `<span class="name ${cls(n.name)}" translate="no">${esc(n.name)}</span>` +
+                      (st ? `<i class="dot ${st}" title="${st}" translate="no"></i>` : '');
         a.dataset.path = n.path;
         a.onclick = () => openFile(n.path, a);
         parent.appendChild(a);
@@ -788,13 +850,14 @@ function renderEntries(){
       box.innerHTML = `<span style="font-size:11px;color:var(--dim)">这个时间范围内没有 commit · 可放宽筛选或点上方「范围」</span>`;
     } else {
       box.innerHTML = shownCommits.map(e => {
-        // 展示：月-日 · 标题（年份/hash 信息量低，不占标题；完整信息放 hover）
+        // 芯片：月-日 · 标题；hover 用 data-full 显示完整 commit 标题
         let md = e.date || '';
         const m = String(md).match(/^\d{4}-(\d{2}-\d{2})$/);
         if (m) md = m[1];
-        const label = `${md} · ${e.title || e.short || ''}`.trim();
-        const tip = `${e.date || ''} · ${e.short || ''} · ${e.title || ''}`.trim();
-        return `<button type="button" class="entry" data-id="${esc(e.id)}" title="${esc(tip)}">${esc(label)}</button>`;
+        const fullTitle = (e.title || e.short || '').trim();
+        const label = `${md} · ${fullTitle}`.trim();
+        const full = fullTitle; // hover 全称 = commit 完整标题
+        return `<button type="button" class="entry" data-id="${esc(e.id)}" data-full="${esc(full)}" title="${esc(full)}">${esc(label)}</button>`;
       }).join('');
       box.querySelectorAll('.entry').forEach(btn => {
         btn.classList.toggle('on', btn.dataset.id === entryId);
@@ -845,8 +908,8 @@ function renderBody(info, path){
   if (info.kind === 'text'){
     let head = '';
     if (info.truncated) head = `<div class="warn">文件 ${info.size} 字节，超过 1MB，仅显示前 1MB</div>`;
-    c.innerHTML = head + `<pre><code class="${info.lang ? 'language-'+info.lang : ''}">${esc(info.content)}</code></pre>`;
-    if (window.hljs && info.lang) hljs.highlightElement(c.querySelector('code'));
+    const langCls = info.lang ? (' language-' + info.lang) : '';
+    c.innerHTML = head + `<div class="code-body${langCls}" translate="yes">${renderCodeLines(info.content, info.lang || '')}</div>`;
   } else if (info.kind === 'image'){
     c.innerHTML = `<img src="/api/raw?path=${encodeURIComponent(path)}" alt="${esc(path)}">`;
   } else if (info.kind === 'video'){
@@ -896,8 +959,7 @@ async function showDiff(path){
     if (!d.diff){
       c.innerHTML = `<div id="empty">无差异：${esc(d.note || '无改动')}</div>`;
     } else {
-      c.innerHTML = `<pre><code class="language-diff">${esc(d.diff)}</code></pre>`;
-      if (window.hljs) hljs.highlightElement(c.querySelector('code'));
+      c.innerHTML = `<div class="code-body language-diff" translate="yes">${renderCodeLines(d.diff, 'diff')}</div>`;
     }
     $('#statusbar').textContent = path + ' · ' + (d.note || 'diff') + (d.st ? ` · ${d.st}` : '');
   } catch (e){ $('#body').innerHTML = `<div id="empty">diff 加载失败：${esc(String(e))}</div>`; }
