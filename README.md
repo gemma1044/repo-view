@@ -14,6 +14,13 @@ ZCode、Claude Code、Codex CLI 这类终端 coding app 没有图形界面：age
 - 语法高亮（TS / Go / Python / Markdown / JSON…几十种），图片、视频直接预览
 - `/` 聚焦搜索文件名，`Esc` 清空
 
+**当一个「这个仓库我最关心哪几块」的导航器用（快捷专区）**
+
+- 启动时用 `--focus <相对路径>`（可重复）把常看的目录钉成侧栏顶部一排 chip，点一下树根就切到那个专区，点仓库名 chip 回全库；**默认永远是完整 repo 树**
+- 浏览时 hover 任意文件夹，行尾出现 `＋`，点一下就钉进快捷专区；chip 上的 `✕` 移除
+- 不想改启动命令？直接分享带种子的链接：`?focus=server/prompts,docs`；`?zone=server/prompts` 则打开直达专区
+- 钉的目录按「仓库路径」存在浏览器 localStorage 里，每个仓库互不干扰；`--focus` 种子每次启动自动回来，页面里移除只对当次生效
+
 **当一个 Diff 查看器用（Session Diff）**
 
 三个粒度随便切，树里**只列有改动的文件**，点开默认就是 diff：
@@ -33,10 +40,12 @@ ZCode、Claude Code、Codex CLI 这类终端 coding app 没有图形界面：age
 ## 快速开始
 
 ```bash
-python3 serve.py <目录> [端口=8770]
+python3 serve.py <目录> [端口=8770] [--focus <相对路径>]...
 # 浏览器打开 http://127.0.0.1:8770
 # 直接进 Session Diff：
 open 'http://127.0.0.1:8770/?mode=session'
+# 例：看整个 repo，但把 prompts 钉成快捷专区：
+python3 serve.py ~/Projects/myapp 8770 --focus server/prompts
 ```
 
 零依赖：只要 Python 3 标准库，不用装任何包。

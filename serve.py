@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """repo-view: 本地只读源码浏览器（零依赖，Python 3 标准库）。
 
-用法: python3 serve.py [目录=当前目录] [端口=8770]
+用法: python3 serve.py [目录=当前目录] [端口=8770] [--focus 相对目录]…
 浏览器打开 http://127.0.0.1:<端口>
   - 全库浏览：左树右文、语法高亮、图片/视频
+  - 快捷专区：--focus 指定的目录（以及页里手动钉的任意目录）进侧栏 chip，
+    点一下树根切到该专区，点仓库名 chip 回全库；pin 按「仓库路径」存 localStorage
   - Session Diff：顶栏切换「工作区 / 各 commit / 整支相对 base」，只看该条目改动与 diff
 """
 import os
@@ -558,13 +560,26 @@ PAGE = r"""<!DOCTYPE html>
   #search { margin:10px; padding:6px 10px; background:var(--bg); color:var(--fg);
             border:1px solid var(--line); border-radius:6px; outline:none; font-size:13px; }
   #search:focus { border-color:var(--accent); }
+  /* 快捷专区：钉过的目录在侧栏顶部成一排 chip，与「范围」chip 同一视觉语言 */
+  #zones { display:none; flex-wrap:wrap; gap:6px; padding:10px 10px 0; align-items:center; }
+  #zones.show { display:flex; }
+  #zones .zlab { font-size:11px; color:var(--dim); font-weight:600; margin-right:2px; }
+  .zchip .x { margin-left:6px; color:var(--dim); font-weight:400; }
+  .zchip:hover .x { color:var(--bad); }
+  .zchip.on .x { color:var(--accent); opacity:.7; }
   #tree { overflow:auto; padding:0 6px 16px; flex:1; min-height:0; }
   /* 文件路径是标识符，不参与整页翻译；翻译注入的 <font> 会打爆 nowrap+flex 树形缩进 */
   #tree details { margin-left:10px; display:block; }
   #tree details.top { margin-left:0; }
   #tree summary { cursor:pointer; padding:2px 6px; border-radius:5px; list-style:none;
-                  user-select:none; display:block; white-space:nowrap; overflow:hidden;
-                  text-overflow:ellipsis; min-width:0; }
+                  user-select:none; display:flex; align-items:center; gap:2px; min-width:0; }
+  #tree summary .sname { flex:1 1 auto; overflow:hidden; text-overflow:ellipsis;
+                         white-space:nowrap; min-width:0; }
+  /* 悬停才出现的钉/拔钉小按钮：不占版面，不新增横线 */
+  #tree summary .pinact { flex:none; visibility:hidden; padding:0 5px; border-radius:4px;
+                          color:var(--dim); font-size:12px; font-style:normal; line-height:1.4; }
+  #tree summary:hover .pinact { visibility:visible; }
+  #tree summary .pinact:hover { color:var(--accent); background:var(--sel); }
   #tree summary::-webkit-details-marker { display:none; }
   #tree summary::before { content:"▸ "; color:var(--dim); }
   #tree details[open] > summary::before { content:"▾ "; }
@@ -653,7 +668,7 @@ PAGE = r"""<!DOCTYPE html>
   </div>
 </header>
 <main>
-  <aside translate="no"><input id="search" placeholder="筛选文件名…" spellcheck="false"><div id="tree" translate="no"></div></aside>
+  <aside translate="no"><div id="zones"></div><input id="search" placeholder="筛选文件名…" spellcheck="false"><div id="tree" translate="no"></div></aside>
   <div id="content">
     <div id="viewbar" style="display:none"><span id="vtitle" translate="no"></span><button id="btnDiff"></button></div>
     <div id="body"><div id="empty">点击左侧文件查看内容</div></div>
@@ -667,6 +682,88 @@ let viewMode = 'all'; // all | session
 let entryId = null, entryNote = '';
 let curEl = null, curPath = null, curSt = null, mode = 'code';
 const $ = s => document.querySelector(s);
+
+/* ---- 快捷专区（quick zones）：任意目录可钉进侧栏 chip，一键把树根切到该目录。
+   机制通用：--focus / ?focus= 只是启动种子，页里 hover 目录行 ＋ 也能钉；pin 按 ROOT 存 localStorage。 */
+const SEED_FOCUS = __SEED_FOCUS__;
+let SEEDS = [], PINS = [], removedSeed = new Set(), zonePath = '', ROOT_KEY = '';
+const normRel = p => String(p || '').replace(/^\.?\//, '').replace(/\/+$/, '');
+
+function findNode(node, path){
+  if (!path) return node;
+  let cur = node;
+  for (const s of String(path).split('/')){
+    if (!cur || !cur.children) return null;
+    cur = cur.children.find(c => c.type === 'dir' && c.name === s) || null;
+    if (!cur) return null;
+  }
+  return cur;
+}
+function loadPins(){
+  SEEDS = (SEED_FOCUS || []).map(normRel).filter(Boolean);
+  try {
+    const f = new URLSearchParams(location.search).get('focus');
+    if (f) SEEDS.push(...f.split(',').map(normRel).filter(Boolean));
+  } catch (_) {}
+  let stored = [];
+  try { stored = JSON.parse(localStorage.getItem('repo-view-pins:' + ROOT_KEY) || '[]'); } catch (_) {}
+  if (!Array.isArray(stored)) stored = [];
+  const merged = [...new Set([...stored.map(normRel), ...SEEDS].filter(Boolean))];
+  PINS = merged.filter(p => findNode(TREE_ALL, p)); // 只保留真实存在的目录
+  savePins();
+}
+function savePins(){
+  try { localStorage.setItem('repo-view-pins:' + ROOT_KEY, JSON.stringify(PINS)); } catch (_) {}
+}
+function togglePin(p){
+  p = normRel(p); if (!p) return;
+  const i = PINS.indexOf(p);
+  if (i >= 0){
+    PINS.splice(i, 1);
+    if (SEEDS.includes(p)) removedSeed.add(p); // 种子本次页内可拔，下次启动仍会种回
+    if (zonePath === p) zonePath = '';
+  } else { PINS.push(p); removedSeed.delete(p); }
+  savePins(); applyZone();
+}
+function renderZones(){
+  const box = $('#zones'); if (!box || !TREE_ALL) return;
+  const pins = PINS.filter(p => !removedSeed.has(p));
+  if (viewMode !== 'all' || !pins.length){ box.className = ''; box.innerHTML = ''; return; }
+  let html = `<span class="zlab">快捷</span>` +
+    `<button type="button" class="scope-btn zchip${zonePath ? '' : ' on'}" data-z="" title="完整仓库文件树">${esc(TREE_ALL.name || '全库')}</button>`;
+  for (const p of pins){
+    const n = findNode(TREE_ALL, p);
+    const label = n ? n.name : p.split('/').pop();
+    html += `<button type="button" class="scope-btn zchip${zonePath === p ? ' on' : ''}" data-z="${esc(p)}" title="专区 · ${esc(p)}">${esc(label)}<span class="x" data-x="${esc(p)}" title="移除专区">✕</span></button>`;
+  }
+  box.className = 'show'; box.innerHTML = html;
+  box.querySelectorAll('.zchip').forEach(b => {
+    b.onclick = e => {
+      const x = e.target.closest('.x');
+      if (x){ e.stopPropagation(); togglePin(x.dataset.x); return; }
+      setZone(b.dataset.z || '');
+    };
+  });
+}
+function setZone(p){
+  zonePath = normRel(p);
+  if (viewMode !== 'all'){ setMode('all'); return; } // setMode('all') 内部会 applyZone
+  applyZone();
+}
+function applyZone(){
+  let sub = zonePath ? findNode(TREE_ALL, zonePath) : TREE_ALL;
+  if (zonePath && !sub){
+    zonePath = ''; sub = TREE_ALL;
+    $('#statusbar').textContent = '专区目录不存在，已切回全库';
+  }
+  TREE = sub || TREE_ALL;
+  renderZones();
+  renderTree($('#search').value.trim().toLowerCase());
+  if (viewMode === 'all'){
+    $('#statusbar').textContent = zonePath ? `专区 ${zonePath} · 点左侧「${TREE_ALL.name || '全库'}」chip 回全库`
+                                           : '全库浏览';
+  }
+}
 
 function esc(s){ return String(s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 /** 逐行块级节点：整页翻译只改每行文字，不会把整文件并成一段。 */
@@ -718,7 +815,13 @@ function renderTree(filter){
         if (top || filter || viewMode === 'session') d.open = true;
         d.className = top ? 'top' : '';
         d.setAttribute('translate', 'no');
-        d.innerHTML = `<summary translate="no">${esc(n.name)}</summary>`;
+        const pinned = PINS.includes(n.path);
+        d.innerHTML = `<summary translate="no"><span class="sname">${esc(n.name)}</span>` +
+          (viewMode === 'all' && !filter
+            ? `<i class="pinact" data-pin="${esc(n.path)}" title="${pinned ? '移出快捷专区' : '钉进快捷专区'}">${pinned ? '✕' : '＋'}</i>` : '') +
+          `</summary>`;
+        const pa = d.querySelector('.pinact');
+        if (pa) pa.onclick = ev => { ev.preventDefault(); ev.stopPropagation(); togglePin(pa.dataset.pin); };
         walk(kids, d, false); parent.appendChild(d);
       } else {
         if (filter && !n.path.toLowerCase().includes(filter)) continue;
@@ -757,10 +860,13 @@ function setMode(m){
     ? `<div id="empty">Session Diff：点顶栏条目，再点左侧改动文件（默认打开 Diff）</div>`
     : `<div id="empty">点击左侧文件查看内容</div>`;
   if (m === 'all'){
-    TREE = TREE_ALL; STATUS = STATUS_ALL || {};
+    TREE = zonePath ? (findNode(TREE_ALL, zonePath) || TREE_ALL) : TREE_ALL;
+    STATUS = STATUS_ALL || {};
+    renderZones();
     renderTree($('#search').value.trim().toLowerCase());
-    $('#statusbar').textContent = '全库浏览';
+    $('#statusbar').textContent = zonePath ? `专区 ${zonePath}` : '全库浏览';
   } else {
+    renderZones(); // session 模式下藏起专区 chip
     selectEntry(entryId || (SESSION && SESSION.defaultEntryId) || 'worktree');
   }
 }
@@ -996,11 +1102,14 @@ Promise.all([
   fetch('/api/session').then(r => r.json()).catch(() => null),
 ]).then(([t, s, sess]) => {
   TREE_ALL = t.tree || t;
+  ROOT_KEY = t.root || location.host; // pin 按仓库绝对路径隔离
+  loadPins();
   TREE = TREE_ALL;
   STATUS_ALL = s.status || s || {};
   STATUS = STATUS_ALL;
   SESSION = sess;
   $('#repoName').textContent = (TREE && TREE.name) || 'repo';
+  document.title = ((TREE && TREE.name) ? TREE.name + ' · ' : '') + 'repo-view';
   if (SESSION){
     renderEntries();
     // 有工作区改动时默认提示可进 Session Diff，但不强切（避免打扰）
@@ -1008,18 +1117,24 @@ Promise.all([
       $('#statusbar').textContent = `就绪 · 工作区 ${SESSION.worktreeCount} 个改动 · 点「Session Diff」只看本分支`;
     }
   }
+  renderZones();
   renderTree('');
-  // URL ?mode=session&entry=...
+  // URL ?mode=session&entry=... / ?zone=相对路径
   const q = new URLSearchParams(location.search);
   if (q.get('mode') === 'session'){
     entryId = q.get('entry') || (SESSION && SESSION.defaultEntryId);
     setMode('session');
+  } else if (q.get('zone')){
+    setZone(q.get('zone'));
   }
 });
 </script>
 </body>
 </html>
 """
+
+# 启动时 main() 会把 --focus 种子写进 PAGE_OUT；默认无种子
+PAGE_OUT = PAGE.replace("__SEED_FOCUS__", "[]")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1043,11 +1158,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         if u.path == "/":
-            self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
+            self._send(200, PAGE_OUT.encode("utf-8"), "text/html; charset=utf-8")
             return
         if u.path == "/api/tree":
             try:
-                self._json({"tree": build_tree()})
+                self._json({"tree": build_tree(), "root": ROOT})
             except RuntimeError as e:
                 self._send(500, str(e).encode(), "text/plain; charset=utf-8")
             return
@@ -1124,15 +1239,54 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, b"not found", "text/plain")
 
 
+def parse_focus(args, root):
+    """--focus 相对目录（可重复，也接受 --focus=a/b）；必须真实存在于 root 下。"""
+    raw = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--focus" and i + 1 < len(args):
+            raw.append(args[i + 1]); i += 2; continue
+        if a.startswith("--focus="):
+            raw.append(a.split("=", 1)[1])
+        i += 1
+    out = []
+    for f in raw:
+        rel = f.strip().replace("\\", "/").strip("/")
+        if not rel:
+            continue
+        p = safe_path(rel)
+        if p and os.path.isdir(p) and not os.path.islink(p):
+            if rel not in out:
+                out.append(rel)
+        else:
+            print(f"忽略 --focus {f}（不是 {root} 下的普通目录）", file=sys.stderr)
+    return out
+
+
 def main():
-    global ROOT
-    if len(sys.argv) > 1:
-        ROOT = os.path.realpath(sys.argv[1])
-    port = int(sys.argv[2]) if len(sys.argv) > 2 else 8770
+    global ROOT, PAGE_OUT
+    positional = []
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--focus" and i + 1 < len(args):
+            i += 2; continue
+        if a.startswith("--focus="):
+            i += 1; continue
+        positional.append(a); i += 1
+    if len(positional) > 0:
+        ROOT = os.path.realpath(positional[0])
+    port = int(positional[1]) if len(positional) > 1 else 8770
     if not os.path.isdir(ROOT):
         sys.exit(f"目录不存在: {ROOT}")
+    focus = parse_focus(sys.argv[1:], ROOT)
+    PAGE_OUT = PAGE.replace("__SEED_FOCUS__", json.dumps(focus, ensure_ascii=False))
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     print(f"repo-view: {ROOT} → http://127.0.0.1:{port}")
+    if focus:
+        print(f"  快捷专区种子: {', '.join(focus)}（页内也可 hover 目录行 ＋ 钉任意目录）")
     print(f"  Session Diff: http://127.0.0.1:{port}/?mode=session")
     try:
         srv.serve_forever()
